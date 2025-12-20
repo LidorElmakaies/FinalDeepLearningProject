@@ -32,7 +32,6 @@ venv.bak/
 .venv/
 
 # PyTorch / ML
-checkpoints/
 *.pth
 *.pt
 *.ckpt
