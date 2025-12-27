@@ -6,45 +6,74 @@ import os
 from pathlib import Path
 import numpy as np
 
+# Dataset constants
+BATCH_SIZE = 32
+
 
 class ThermalPalmDataset(Dataset):
-    def __init__(self, root_dir, transform=None):
+    def __init__(self, root_dir, transform=None, include_flipped=True):
         self.root_dir = Path(root_dir)
         self.transform = transform
+        self.include_flipped = include_flipped  # Whether to include flipped versions
 
-        self.images = []
-        self.labels = []
+        # Store tuples of (img_path, label, should_flip)
+        self.data = []
 
         # 0 = healthy, 1 = sick
         healthy_dir = self.root_dir / "healthy"
         sick_dir = self.root_dir / "sick"
 
+        # Load original images
         if healthy_dir.exists():
             for img_path in list(healthy_dir.glob("*.jpg")) + list(
                 healthy_dir.glob("*.png")
             ):
-                self.images.append(str(img_path))
-                self.labels.append(0)  # healthy
+                # Add original image
+                self.data.append(
+                    (str(img_path), 0, False)
+                )  # (path, label, should_flip)
+
+                # Add flipped version if enabled
+                if self.include_flipped:
+                    self.data.append(
+                        (str(img_path), 0, True)
+                    )  # (path, label, should_flip)
 
         if sick_dir.exists():
             for img_path in list(sick_dir.glob("*.jpg")) + list(sick_dir.glob("*.png")):
-                self.images.append(str(img_path))
-                self.labels.append(1)  # sick
+                # Add original image
+                self.data.append(
+                    (str(img_path), 1, False)
+                )  # (path, label, should_flip)
 
-        print(f"Loaded {len(self.images)} images from {root_dir}")
-        print(f"Healthy: {self.labels.count(0)}, Sick: {self.labels.count(1)}")
+                # Add flipped version if enabled
+                if self.include_flipped:
+                    self.data.append(
+                        (str(img_path), 1, True)
+                    )  # (path, label, should_flip)
+
+        original_count = len(self.data) // 2 if self.include_flipped else len(self.data)
+        healthy_count = sum(1 for _, label, _ in self.data if label == 0)
+        sick_count = sum(1 for _, label, _ in self.data if label == 1)
+        print(
+            f"Loaded {len(self.data)} images from {root_dir} ({original_count} original + {original_count if self.include_flipped else 0} flipped)"
+        )
+        print(f"Healthy: {healthy_count}, Sick: {sick_count}")
 
     def __len__(self):
-        return len(self.images)
+        return len(self.data)
 
     def __getitem__(self, idx):
-        img_path = self.images[idx]
-        label = self.labels[idx]
+        img_path, label, should_flip = self.data[idx]
 
         image = Image.open(img_path)
 
         if image.mode != "RGB":
             image = image.convert("RGB")
+
+        # Apply horizontal flip if this is a flipped version
+        if should_flip:
+            image = image.transpose(Image.FLIP_LEFT_RIGHT)
 
         if self.transform:
             image = self.transform(image)
@@ -60,10 +89,8 @@ def get_transforms(mode="train"):
                     (256, 256)
                 ),  # Larger resize => allow random crop variation
                 transforms.RandomCrop(224),  # Random crop (augmentation)
-                transforms.RandomHorizontalFlip(
-                    p=0.5
-                ),  # Horizontal flip (augmentation)
-                transforms.RandomRotation(degrees=15),  # Light rotation (augmentation)
+                # Note: RandomHorizontalFlip removed since we're adding flipped images explicitly
+                # transforms.RandomRotation(degrees=15),  # Light rotation (augmentation)
                 transforms.ToTensor(),  # Convert to Tensor (0-1)
                 transforms.Normalize(  # Normalization (ImageNet mean and std)
                     mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
@@ -84,30 +111,40 @@ def get_transforms(mode="train"):
     return transform
 
 
-def get_dataloaders(data_root="data", batch_size=32, num_workers=4):
+def get_dataloaders(data_root="data", batch_size=BATCH_SIZE, num_workers=4):
     # Create Datasets
+    # Include flipped images only for training (augmentation)
     train_dataset = ThermalPalmDataset(
-        root_dir=os.path.join(data_root, "train"), transform=get_transforms("train")
+        root_dir=os.path.join(data_root, "train"),
+        transform=get_transforms("train"),
+        include_flipped=True,  # Double the training data with flipped images
     )
 
+    # Validation also includes flipped images (same as training)
     val_dataset = ThermalPalmDataset(
-        root_dir=os.path.join(data_root, "val"), transform=get_transforms("val")
+        root_dir=os.path.join(data_root, "val"),
+        transform=get_transforms("val"),
+        include_flipped=True,  # Double the validation data with flipped images
     )
 
+    # Test also includes flipped images (same as training)
     test_dataset = ThermalPalmDataset(
-        root_dir=os.path.join(data_root, "test"), transform=get_transforms("test")
+        root_dir=os.path.join(data_root, "test"),
+        transform=get_transforms("test"),
+        include_flipped=True,
     )
 
-    if len(train_dataset) == 0:
-        raise ValueError(f"No training data found in {data_root}/train/")
-
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        shuffle=True,  # Shuffle in training
-        num_workers=num_workers,
-        pin_memory=True if torch.cuda.is_available() else False,  # Faster on GPU
-    )
+    if len(train_dataset) > 0:
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,  # Shuffle in training
+            num_workers=num_workers,
+            pin_memory=True if torch.cuda.is_available() else False,  # Faster on GPU
+        )
+    else:
+        print(f"No training data found in {data_root}/train/")
+        train_loader = None
 
     if len(val_dataset) > 0:
         val_loader = DataLoader(

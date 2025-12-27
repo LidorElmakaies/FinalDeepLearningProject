@@ -22,16 +22,13 @@ from torchvision import models
 
 
 class PalmDiseaseDetector(nn.Module):
-    def __init__(self, freeze_backbone=True):
+    def __init__(self):
         super(PalmDiseaseDetector, self).__init__()
         self.backbone = models.resnet50(pretrained=True)
-        if freeze_backbone:
-            for param in self.backbone.parameters():
-                param.requires_grad = False
-            print("Backbone weights frozen - only Head will be trained")
-        else:
-            print("Backbone weights trainable - full fine-tuning mode")
-        num_features = self.backbone.fc.in_features  # should be2048
+        for param in self.backbone.parameters():
+            param.requires_grad = False
+        print("Backbone weights frozen - only Head will be trained")
+        num_features = self.backbone.fc.in_features  # should be 2048
 
         self.backbone.fc = nn.Sequential(
             # Layer 1: Compression from 2048 to 512
@@ -50,10 +47,13 @@ class PalmDiseaseDetector(nn.Module):
     def forward(self, x):
         return self.backbone(x)
 
+    def unfreeze_backbone(self):
+        for param in self.backbone.parameters():
+            param.requires_grad = True
+
     def predict(self, x):
         with torch.no_grad():
             logits = self.forward(x)
-            predictions = torch.argmax(
-                logits, dim=1
-            )  # argmax returns highest value index
+            # Apply argmax to get predicted class indices
+            predictions = torch.argmax(logits, dim=1)
             return predictions

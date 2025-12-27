@@ -1,7 +1,11 @@
 import torch
+import torch.optim as optim
 import copy
 import time
 from tqdm import tqdm
+
+# Training constants
+LEARNING_RATE = 5e-5
 
 
 def train_epoch(model, train_loader, criterion, optimizer, device, epoch):
@@ -21,7 +25,8 @@ def train_epoch(model, train_loader, criterion, optimizer, device, epoch):
 
         outputs = model(images)  # shape [batch_size, 2] - logits [healthy, sick]
 
-        loss = criterion(outputs, labels)  # Calculate Loss (CrossEntropyLoss)
+        # CrossEntropyLoss internally applies softmax, then calculates loss
+        loss = criterion(outputs, labels)
 
         # backwards propagation (calculate gradients)
         loss.backward()  # Calculate gradients
@@ -29,7 +34,8 @@ def train_epoch(model, train_loader, criterion, optimizer, device, epoch):
 
         running_loss += loss.item()
 
-        # Calculate accuracy
+        # Calculate accuracy: argmax on logits to get predicted class
+        # (Note: argmax on logits gives same result as argmax on softmax(logits))
         predictions = torch.argmax(outputs, dim=1)
 
         correct += (predictions == labels).sum().item()  # count correct predictions
@@ -64,13 +70,16 @@ def validate(model, val_loader, criterion, device, epoch):
             labels = labels.to(device).long()
 
             # Forward pass only (no backward)
+            # Model returns raw logits - CrossEntropyLoss applies softmax internally
             outputs = model(images)
-            loss = criterion(outputs, labels)  # Calculate Loss (CrossEntropyLoss)
+            # CrossEntropyLoss internally applies softmax, then calculates loss
+            loss = criterion(outputs, labels)
 
             # Statistics
             running_loss += loss.item()  # sum of losses for this epoch
 
-            # Get predicted class (0=healthy, 1=sick)
+            # Calculate accuracy: argmax on logits to get predicted class
+            # (Note: argmax on logits gives same result as argmax on softmax(logits))
             predictions = torch.argmax(outputs, dim=1)
 
             correct += (predictions == labels).sum().item()
@@ -94,22 +103,25 @@ def train(
     train_loader,
     val_loader,
     criterion,
-    optimizer,
     device,
+    lr=LEARNING_RATE,
     patience=10,
+    min_epochs=None,  # Minimum epochs before early stopping checks
 ):
+    # Create optimizer
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+
     # Training-specific variables
-    best_val_acc = 0.0
-    best_train_acc = 0.0  # Track best training accuracy for tie-breaking
-    best_epoch = 0
-    best_val_loss = float("inf")
+    best_val_acc = 0.0  # Primary criterion: higher is better
+    best_val_loss = float(
+        "inf"
+    )  # Tie-breaker: lower is better when accuracies are equal
+    best_train_loss = float("inf")
+    best_train_acc = 0.0
     best_model_state = None
-    best_optimizer_state = None
     has_improvement_in_current_run = (
         False  # Track if there was improvement in current patience window
     )
-
-    print("Starting Training")
 
     # Training loop - can continue beyond initial epochs if improvement detected
     epoch = 0
@@ -134,21 +146,24 @@ def train(
         print(f"  Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.2f}%")
         print(f"  Time: {epoch_time:.2f}s\n")
 
-        # Track best model state
+        # Track best model state based on validation accuracy (primary), then validation loss (tie-breaker)
         should_update_best = False
         if val_acc > best_val_acc:
+            # Better validation accuracy - this is the new best model
             best_val_acc = val_acc
+            best_val_loss = val_loss
+            best_train_loss = train_loss
             best_train_acc = train_acc
             best_epoch = epoch
-            best_val_loss = val_loss
             should_update_best = True
         elif val_acc == best_val_acc:
-            # When validation accuracy is equal, check if training accuracy is better
-            if train_acc > best_train_acc:
+            # Same validation accuracy - use validation loss as tie-breaker (lower is better)
+            if val_loss < best_val_loss:
                 best_val_acc = val_acc
+                best_val_loss = val_loss
+                best_train_loss = train_loss
                 best_train_acc = train_acc
                 best_epoch = epoch
-                best_val_loss = val_loss
                 should_update_best = True
 
         if should_update_best:
@@ -157,35 +172,67 @@ def train(
             best_optimizer_state = copy.deepcopy(optimizer.state_dict())
             has_improvement_in_current_run = True
             print(
-                f"New best validation accuracy: {val_acc:.2f}% (Train Acc: {train_acc:.2f}%)\n"
+                f"New best validation accuracy: {val_acc:.2f}% (Val Loss: {val_loss:.4f}, Train Acc: {train_acc:.2f}%)\n"
             )
 
-        # Check for early stopping every X epochs
-        if (epoch + 1) % patience == 0:
-            if has_improvement_in_current_run:
-                # Improvement detected in this patience window - continue training
-                has_improvement_in_current_run = False  # Reset for next window
-                print(
-                    f"Improvement detected at epoch {epoch+1} (best: {best_val_acc:.2f}%). Continuing training.\n"
-                )
-            else:
-                # No improvement in last X epochs - stop training
-                print(
-                    f"No improvement in validation accuracy over the last {patience} epochs. Best was {best_val_acc:.2f}%. Stopping."
-                )
-                should_stop = True
+        # Early stopping logic - only check after minimum epochs if specified
+        if min_epochs is None or (epoch + 1) >= min_epochs:
+            if (epoch + 1) % patience == 0:
+                if has_improvement_in_current_run:
+                    # Improvement detected in this patience window - continue training
+                    has_improvement_in_current_run = False  # Reset for next window
+                    print(
+                        f"Improvement detected at epoch {epoch+1} (best val acc: {best_val_acc:.2f}%). Continuing training.\n"
+                    )
+                else:
+                    # No improvement in last X epochs - stop training
+                    print(
+                        f"No improvement in validation accuracy over the last {patience} epochs. Best was {best_val_acc:.2f}%. Stopping."
+                    )
+                    should_stop = True
 
         epoch += 1
 
     print("Training Completed!")
     print(f"Best Validation Accuracy: {best_val_acc:.2f}%")
+    print(f"Best Validation Loss: {best_val_loss:.4f}")
     print(f"Best Training Accuracy: {best_train_acc:.2f}%")
+    print(f"Best Training Loss: {best_train_loss:.4f}")
 
     return {
         "best_model_state": best_model_state,
-        "best_optimizer_state": best_optimizer_state,
         "best_val_acc": best_val_acc,
-        "best_train_acc": best_train_acc,
-        "best_epoch": best_epoch,
         "best_val_loss": best_val_loss,
     }
+
+
+def fine_tune(
+    model,
+    train_loader,
+    val_loader,
+    criterion,
+    device,
+    lr=LEARNING_RATE,
+    min_epochs=10,
+    patience=5,
+):
+    print("Starting Fine-Tuning Phase (Backbone Unfrozen)")
+
+    # Unfreeze the backbone for fine-tuning
+    model.unfreeze_backbone()
+    print("Backbone weights unfrozen - full fine-tuning mode enabled")
+
+    # Use 1/10 of the learning rate for fine-tuning
+    fine_tune_lr = lr / 10.0
+    print(f"Using learning rate: {fine_tune_lr} (1/10 of {lr})")
+
+    return train(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        criterion=criterion,
+        device=device,
+        lr=fine_tune_lr,
+        patience=patience,
+        min_epochs=min_epochs,
+    )

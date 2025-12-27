@@ -1,92 +1,95 @@
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import os
 import sys
 from pathlib import Path
 from datetime import datetime
-from utils import save_checkpoint
+from utils import save_checkpoint, get_device
 
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
 from models.palm_disease_detector import PalmDiseaseDetector
 from data.dataset import get_dataloaders
-from train import train
+from train import train, fine_tune
 
 
 def main():
-    # Default values
-    data_dir = "data"
-    epochs = 50
-    batch_size = 32
-    lr = 1e-4
-    freeze_backbone = True  # Set to False for full fine-tuning
-
     # Device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-    if torch.cuda.is_available():
-        print(f"GPU: {torch.cuda.get_device_name(0)}")
-        print(f"CUDA Version: {torch.version.cuda}")
+    device = get_device()
 
     # Load data
     print("Loading datasets...")
     train_loader, val_loader, _ = get_dataloaders(
-        data_root=data_dir,
-        batch_size=batch_size,
         num_workers=4 if torch.cuda.is_available() else 0,
     )
 
-    # Require validation data
+    # Validate required datasets exist
+    if train_loader is None:
+        raise ValueError("Training data is required but not found in data/train/")
     if val_loader is None:
-        raise ValueError(
-            "No validation data found. Validation data is required for training."
-        )
+        raise ValueError("Validation data is required but not found in data/val/")
 
-    # Create model
+    # Create model (backbone frozen by default)
     print("Creating model...")
-    model = PalmDiseaseDetector(freeze_backbone=freeze_backbone)
+    model = PalmDiseaseDetector()
     model = model.to(device)
 
     # Loss function
     criterion = nn.CrossEntropyLoss()
 
-    # Optimizer
-    optimizer = optim.Adam(model.parameters(), lr=lr)
-
-    # Train the model
-    patience = 10  # Check for improvement every X epochs
+    # Train the model (with frozen backbone)
+    print("Starting Training")
     training_results = train(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
         criterion=criterion,
-        optimizer=optimizer,
         device=device,
-        patience=patience,
+        patience=10,
     )
 
-    # Save the best model at the end with timestamp and metrics in filename
+    # Fine-tuning phase: Unfreeze backbone and train for 10 more epochs with 1/10 learning rate
     if training_results["best_model_state"] is not None:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        checkpoint_filename = f"best_model_{timestamp}_val{training_results['best_val_acc']:.2f}_train{training_results['best_train_acc']:.2f}.pth"
+        print("Loading best model for fine-tuning...")
 
-        # Create a temporary model to save the checkpoint
-        temp_model = PalmDiseaseDetector(freeze_backbone=freeze_backbone)
-        temp_model.load_state_dict(training_results["best_model_state"])
-        temp_optimizer = optim.Adam(temp_model.parameters(), lr=lr)
-        temp_optimizer.load_state_dict(training_results["best_optimizer_state"])
+        # Load the best model state
+        model.load_state_dict(training_results["best_model_state"])
+
+        # Fine-tune with minimum 10 epochs and patience of 5
+        fine_tune_results = fine_tune(
+            model=model,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            criterion=criterion,
+            device=device,
+            min_epochs=10,
+            patience=10,
+        )
+
+        # Use the fine-tuned model
+        final_model_state = fine_tune_results["best_model_state"]
+        final_val_acc = fine_tune_results["best_val_acc"]
+        final_val_loss = fine_tune_results["best_val_loss"]
+    else:
+        print("No best model found from initial training. Skipping fine-tuning.")
+        final_model_state = None
+        final_val_acc = 0.0
+        final_val_loss = float("inf")
+
+    # Save the final best model
+    if final_model_state is not None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        checkpoint_filename = f"best_model_{timestamp}_valAcc{final_val_acc:.2f}_valLoss{final_val_loss:.4f}.pth"
+
+        # Load the final model state into the existing model
+        model.load_state_dict(final_model_state)
 
         save_checkpoint(
-            temp_model,
-            temp_optimizer,
-            training_results["best_epoch"],
-            training_results["best_val_loss"],
-            training_results["best_val_acc"],
+            model,
             checkpoint_filename,
         )
-        print(f"Best model saved: {checkpoint_filename}")
+        print(f"Final best model saved: {checkpoint_filename}")
     else:
         print("No best model found to save.")
 
