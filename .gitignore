@@ -94,3 +94,6 @@ predictions/
 outputs/
 results/
 
+test/
+train/
+val/
