@@ -118,3 +118,4 @@ def prepare_thermal_dataset(
     # Cleanup
     shutil.rmtree(temp_dir)
     print("Done!")
+

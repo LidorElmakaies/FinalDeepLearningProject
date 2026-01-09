@@ -3,6 +3,7 @@ import torch.optim as optim
 import copy
 import time
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 # Training constants
 LEARNING_RATE = 5e-5
@@ -98,6 +99,33 @@ def validate(model, val_loader, criterion, device, epoch):
     return avg_loss, accuracy
 
 
+def plot_training_history(train_losses, val_losses, val_accs):
+    epochs = range(1, len(train_losses) + 1)
+
+    # Create figure with two subplots
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Plot 1: Loss (Train vs Validation)
+    ax1.plot(epochs, train_losses, "b-", label="Train Loss", linewidth=2)
+    ax1.plot(epochs, val_losses, "r-", label="Val Loss", linewidth=2)
+    ax1.set_xlabel("Epoch", fontsize=12)
+    ax1.set_ylabel("Loss", fontsize=12)
+    ax1.set_title("Training and Validation Loss", fontsize=14, fontweight="bold")
+    ax1.legend(fontsize=11)
+    ax1.grid(True, alpha=0.3)
+
+    # Plot 2: Validation Accuracy
+    ax2.plot(epochs, val_accs, "g-", label="Val Accuracy", linewidth=2)
+    ax2.set_xlabel("Epoch", fontsize=12)
+    ax2.set_ylabel("Accuracy (%)", fontsize=12)
+    ax2.set_title("Validation Accuracy", fontsize=14, fontweight="bold")
+    ax2.legend(fontsize=11)
+    ax2.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.show()
+
+
 def pick_better_model_results(primary_results, secondary_results):
     if primary_results is None or primary_results.get("best_model_state") is None:
         return secondary_results, "secondary"
@@ -154,6 +182,11 @@ def train(
         False  # Track if there was improvement in current patience window
     )
 
+    # History tracking for visualization
+    train_losses = []
+    val_losses = []
+    val_accs = []
+
     # Training loop - can continue beyond initial epochs if improvement detected
     epoch = 0
     should_stop = False
@@ -168,6 +201,11 @@ def train(
 
         # Validation
         val_loss, val_acc = validate(model, val_loader, criterion, device, epoch)
+
+        # Store history for visualization
+        train_losses.append(train_loss)
+        val_losses.append(val_loss)
+        val_accs.append(val_acc)
 
         epoch_time = time.time() - epoch_start_time
 
@@ -226,6 +264,11 @@ def train(
     print(f"Best Validation Loss: {best_val_loss:.4f}")
     print(f"Best Training Accuracy: {best_train_acc:.2f}%")
     print(f"Best Training Loss: {best_train_loss:.4f}")
+
+    # Plot training history
+    if len(train_losses) > 0:
+        print("\nGenerating training history plots...")
+        plot_training_history(train_losses, val_losses, val_accs)
 
     return {
         "best_model_state": best_model_state,
