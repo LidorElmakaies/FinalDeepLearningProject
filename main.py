@@ -4,17 +4,20 @@ import os
 import sys
 from pathlib import Path
 from datetime import datetime
-from utils import save_checkpoint, get_device
+from utils import save_checkpoint, get_device, prepare_thermal_dataset
 
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
 from models.palm_disease_detector import PalmDiseaseDetector
 from data.dataset import get_dataloaders
-from train import train, fine_tune
+from train import train, fine_tune, pick_better_model_results
 
 
 def main():
+    # Extract and split dataset (idempotent data preparation utility)
+    prepare_thermal_dataset()
+
     # Device
     device = get_device()
 
@@ -49,28 +52,35 @@ def main():
         patience=10,
     )
 
-    # Fine-tuning phase: Unfreeze backbone and train for 10 more epochs with 1/10 learning rate
+    # Fine-tuning phase: Unfreeze backbone and train for minimum 20 epochs with 1/10 learning rate
     if training_results["best_model_state"] is not None:
-        print("Loading best model for fine-tuning...")
-
         # Load the best model state
         model.load_state_dict(training_results["best_model_state"])
-
-        # Fine-tune with minimum 10 epochs and patience of 5
+        # Fine-tune with minimum 20 epochs and patience of 5
         fine_tune_results = fine_tune(
             model=model,
             train_loader=train_loader,
             val_loader=val_loader,
             criterion=criterion,
             device=device,
-            min_epochs=10,
-            patience=10,
+            min_epochs=20,
+            patience=5,
         )
 
-        # Use the fine-tuned model
-        final_model_state = fine_tune_results["best_model_state"]
-        final_val_acc = fine_tune_results["best_val_acc"]
-        final_val_loss = fine_tune_results["best_val_loss"]
+        # Compare both models and pick the better one using shared helper
+        best_results, source = pick_better_model_results(
+            primary_results=training_results,
+            secondary_results=fine_tune_results,
+        )
+
+        if source == "primary":
+            print("\nInitial training model is better. Using initial training model.")
+        else:
+            print("\nFine-tuned model is better. Using fine-tuned model.")
+
+        final_model_state = best_results["best_model_state"]
+        final_val_acc = best_results["best_val_acc"]
+        final_val_loss = best_results["best_val_loss"]
     else:
         print("No best model found from initial training. Skipping fine-tuning.")
         final_model_state = None
@@ -89,7 +99,7 @@ def main():
             model,
             checkpoint_filename,
         )
-        print(f"Final best model saved: {checkpoint_filename}")
+        print(f"\nFinal best model saved: {checkpoint_filename}")
     else:
         print("No best model found to save.")
 

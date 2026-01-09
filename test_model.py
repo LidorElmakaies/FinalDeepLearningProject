@@ -12,7 +12,7 @@ sys.path.insert(0, str(project_root))
 from models.palm_disease_detector import PalmDiseaseDetector
 from data.dataset import get_dataloaders
 from utils.checkpoint import get_latest_checkpoint
-from utils import get_device
+from utils import get_device, prepare_thermal_dataset
 
 
 def load_model(checkpoint_path, device):
@@ -100,8 +100,8 @@ def test_model(model, test_loader, criterion, device):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Test Palm Disease Detector Model")
-    args = parser.parse_args()
+    # Ensure dataset is prepared (idempotent)
+    prepare_thermal_dataset()
 
     device = get_device()
 

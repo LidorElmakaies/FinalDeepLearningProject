@@ -98,6 +98,37 @@ def validate(model, val_loader, criterion, device, epoch):
     return avg_loss, accuracy
 
 
+def pick_better_model_results(primary_results, secondary_results):
+    if primary_results is None or primary_results.get("best_model_state") is None:
+        return secondary_results, "secondary"
+    if secondary_results is None or secondary_results.get("best_model_state") is None:
+        return primary_results, "primary"
+
+    primary_acc = primary_results["best_val_acc"]
+    primary_loss = primary_results["best_val_loss"]
+    secondary_acc = secondary_results["best_val_acc"]
+    secondary_loss = secondary_results["best_val_loss"]
+
+    # Print comparison
+    print("Comparing Models")
+    print(
+        f"Initial Training - Val Acc: {primary_acc:.2f}%, Val Loss: {primary_loss:.4f}"
+    )
+    print(
+        f"Fine-Tuning      - Val Acc: {secondary_acc:.2f}%, Val Loss: {secondary_loss:.4f}"
+    )
+
+    if secondary_acc > primary_acc:
+        return secondary_results, "secondary"
+    if secondary_acc < primary_acc:
+        return primary_results, "primary"
+
+    # Accuracies equal - use loss as tie-breaker (lower is better)
+    if secondary_loss < primary_loss:
+        return secondary_results, "secondary"
+    return primary_results, "primary"
+
+
 def train(
     model,
     train_loader,
@@ -154,7 +185,6 @@ def train(
             best_val_loss = val_loss
             best_train_loss = train_loss
             best_train_acc = train_acc
-            best_epoch = epoch
             should_update_best = True
         elif val_acc == best_val_acc:
             # Same validation accuracy - use validation loss as tie-breaker (lower is better)
@@ -163,13 +193,11 @@ def train(
                 best_val_loss = val_loss
                 best_train_loss = train_loss
                 best_train_acc = train_acc
-                best_epoch = epoch
                 should_update_best = True
 
         if should_update_best:
             # Save the best model state for later (deep copy to avoid reference issues)
             best_model_state = copy.deepcopy(model.state_dict())
-            best_optimizer_state = copy.deepcopy(optimizer.state_dict())
             has_improvement_in_current_run = True
             print(
                 f"New best validation accuracy: {val_acc:.2f}% (Val Loss: {val_loss:.4f}, Train Acc: {train_acc:.2f}%)\n"

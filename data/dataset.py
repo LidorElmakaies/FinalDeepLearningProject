@@ -8,6 +8,7 @@ import numpy as np
 
 # Dataset constants
 BATCH_SIZE = 32
+DEFAULT_DATA_ROOT = "data"
 
 
 class ThermalPalmDataset(Dataset):
@@ -111,7 +112,9 @@ def get_transforms(mode="train"):
     return transform
 
 
-def get_dataloaders(data_root="data", batch_size=BATCH_SIZE, num_workers=4):
+def get_dataloaders(data_root=None, batch_size=BATCH_SIZE, num_workers=4):
+    if data_root is None:
+        data_root = DEFAULT_DATA_ROOT
     # Create Datasets
     # Include flipped images only for training (augmentation)
     train_dataset = ThermalPalmDataset(
